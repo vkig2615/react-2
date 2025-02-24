@@ -18,7 +18,7 @@ jobs:
 
       - name: Build and Push Docker Image
         run: |
-          IMAGE_TAG=your-dockerhub-username/hello-world:v2
+          IMAGE_TAG=vk2615/hello-world:v2
           docker build -t $IMAGE_TAG .
           docker push $IMAGE_TAG
 
@@ -30,7 +30,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             docker pull your-dockerhub-username/hello-world:v2
-            docker service update --image your-dockerhub-username/hello-world:v2 hello-world-app
+            docker service update --image vk2615/hello-world:v2 hello-world-app
 
       - name: Check Deployment Status
         uses: appleboy/ssh-action@master
@@ -43,6 +43,6 @@ jobs:
             STATUS=$(docker service ps hello-world-app --format "{{.CurrentState}}" | grep Running | wc -l)
             if [ "$STATUS" -eq "0" ]; then
               echo "Deployment failed! Rolling back to v1..."
-              docker service update --image your-dockerhub-username/hello-world:v1 hello-world-app
+              docker service update --image vk2615/hello-world:v1 hello-world-app
               exit 1
             fi
