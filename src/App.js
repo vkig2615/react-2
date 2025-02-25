@@ -1,10 +1,8 @@
 function App() {
-  throw new Error("Bug in version 2!");  // Simulating failure
-  return (
-    <div>
-      <h1>Hello World - Version 2 (Buggy)</h1>
-    </div>
-  );
+  throw new Error("This is a buggy v2!");
+  return <h1>Buggy Version 2</h1>;
 }
+
 export default App;
+
 
