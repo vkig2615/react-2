@@ -3,7 +3,7 @@ name: Deploy to Docker Swarm
 on:
   push:
     branches:
-      - main  # Runs the pipeline when code is pushed to main branch
+      - main
 
 jobs:
   deploy:
@@ -13,36 +13,57 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Log in to Docker Hub
-        run: echo "${{ secrets.DOCKER_HUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin
+      - name: SSH into Server and Check if v1 is Running
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            STATUS=$(docker service ps hello-world-app --format "{{.CurrentState}}" | grep Running | wc -l)
+            if [ "$STATUS" -eq "0" ]; then
+              echo "v1 is NOT running! Deploying v1 before proceeding."
+              docker service create --name hello-world-app --publish 4000:80 your-dockerhub-username/hello-world:v1
+              sleep 10  # Wait for v1 to start
+            else
+              echo "v1 is already running. Proceeding with v2 deployment."
+            fi
 
-      - name: Build and Push Docker Image
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Build and Push v2 Docker Image
         run: |
-          IMAGE_TAG=vk2615/hello-world:v2
+          IMAGE_TAG=${{ secrets.DOCKER_USERNAME }}/hello-world:v2
           docker build -t $IMAGE_TAG .
           docker push $IMAGE_TAG
 
-      - name: SSH into Server and Deploy v2
+      - name: Deploy v2 to Swarm
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            docker pull vk2615/hello-world:v2
-            docker service update --image vk2615/hello-world:v2 hello-world-app
+            echo "Pulling and updating to v2..."
+            docker pull your-dockerhub-username/hello-world:v2
+            docker service update --image your-dockerhub-username/hello-world:v2 hello-world-app
+            sleep 10  # Give some time for v2 to start
 
-      - name: Check Deployment Status
+      - name: Health Check for v2
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            sleep 30  # Wait for service to stabilize
-            STATUS=$(docker service ps hello-world-app --format "{{.CurrentState}}" | grep Running | wc -l)
-            if [ "$STATUS" -eq "0" ]; then
-              echo "Deployment failed! Rolling back to v1..."
-              docker service update --image vk2615/hello-world:v1 hello-world-app
-              exit 1
+            echo "Checking if v2 is running successfully..."
+            sleep 15
+            RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000)
+            if [ "$RESPONSE" -ne 200 ]; then
+              echo "v2 is failing! Rolling back to v1..."
+              docker service update --image your-dockerhub-username/hello-world:v1 hello-world-app
+              exit 1  # Mark this step as failed
+            else
+              echo "v2 is running successfully!"
             fi
