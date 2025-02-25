@@ -1,4 +1,4 @@
-name: Deploy to Docker Swarm
+name: Deploy React App with Rollback on Failure
 
 on:
   push:
@@ -6,46 +6,25 @@ on:
       - main
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # Checkout the repository
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Notify Slack - Deployment Started 🚀
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          curl -X POST -H 'Content-type: application/json' --data '{
-            "text": "🚀 *Deployment started!* Deploying v2 to Docker Swarm..."
-          }' $SLACK_WEBHOOK_URL
+      # Log in to Docker Hub
+      - name: Login to Docker Hub
+        run: echo "${{ secrets.DOCKER_HUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_HUB_USER }}" --password-stdin
 
-      - name: SSH into Server and Check if v1 is Running
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            STATUS=$(docker service ps hello-world-app --format "{{.CurrentState}}" | grep Running | wc -l)
-            if [ "$STATUS" -eq "0" ]; then
-              echo "v1 is NOT running! Deploying v1 before proceeding."
-              docker service create --name hello-world-app --publish 4000:80 vk2615/hello-world-1:v1
-              sleep 10
-            else
-              echo "v1 is already running. Proceeding with v2 deployment."
-            fi
-
-      - name: Log in to Docker Hub
-        run: echo "${{ secrets.DOCKER_HUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin
-
+      # Build & push the v2 image
       - name: Build and Push v2 Docker Image
         run: |
-          IMAGE_TAG=vk2615/hello-world-1:v2
-          docker build -t $IMAGE_TAG .
-          docker push $IMAGE_TAG
+          docker build -t vk2615/hello-world-1:v2 .
+          docker push vk2615/hello-world-1:v2
 
+      # SSH into the server and deploy v2
       - name: Deploy v2 to Swarm
         uses: appleboy/ssh-action@master
         with:
@@ -53,44 +32,36 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            echo "Checking if v1 is running..."
+            V1_STATUS=$(docker service ls | grep "hello-world-app" | wc -l)
+            
+            if [ "$V1_STATUS" -eq "0" ]; then
+              echo "v1 is missing! Deploying v1..."
+              docker service create --name hello-world-app --publish 4000:80 vk2615/hello-world-1:v1
+              sleep 10
+            fi
+            
             echo "Pulling latest v2 image..."
-            docker pull vk2615/hello-world-1:v2
+            docker pull vk2615/hello-world-1:v2 || { echo "Failed to pull v2 image"; exit 1; }
+
             echo "Deploying v2..."
-            docker service update --force --image vk2615/hello-world-1:v2 hello-world-app
-            sleep 10
+            docker service update --force --image vk2615/hello-world-1:v2 hello-world-app || { 
+              echo "Deployment failed! Rolling back to v1..."
+              docker service update --force --image vk2615/hello-world-1:v1 hello-world-app
+              exit 1
+            }
 
-      - name: Health Check for v2
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-        continue-on-error: true
-        script: |
-          echo "Checking if v2 is running successfully..."
-          sleep 15
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000)
-          if [ "$RESPONSE" -ne 200 ]; then
-            echo "v2 is failing! Forcing rollback to v1..."
-            docker service update --force --image vk2615/hello-world-1:v1 hello-world-app
-            exit 1  # Mark this step as failed so CI/CD knows it failed
-          else
-            echo "v2 is running successfully!"
-      
-      - name: Notify Slack - Deployment Successful ✅
+      # Send Slack Notification
+      - name: Send Slack Notification on Success
         if: success()
+        uses: rtCamp/action-slack-notify@v2
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          curl -X POST -H 'Content-type: application/json' --data '{
-            "text": "✅ *Deployment successful!* v2 is now running on Docker Swarm. 🎉"
-          }' $SLACK_WEBHOOK_URL
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_MESSAGE: "✅ Deployment of v2 was successful! 🚀"
 
-      - name: Notify Slack - Rollback to v1 ❌
+      - name: Send Slack Notification on Failure
         if: failure()
+        uses: rtCamp/action-slack-notify@v2
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          curl -X POST -H 'Content-type: application/json' --data '{
-            "text": "❌ *Deployment failed!* v2 was buggy. Rolled back to v1 automatically. ⚠️"
-          }' $SLACK_WEBHOOK_URL
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_MESSAGE: "⚠️ Deployment of v2 failed! Rolling back to v1! 🔄"
