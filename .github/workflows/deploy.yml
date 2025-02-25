@@ -29,7 +29,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            docker pull your-dockerhub-username/hello-world:v2
+            docker pull vk2615/hello-world:v2
             docker service update --image vk2615/hello-world:v2 hello-world-app
 
       - name: Check Deployment Status
