@@ -1,4 +1,4 @@
-name: Deploy React App with Rollback on Failure
+name: Deploy to Docker Swarm
 
 on:
   push:
@@ -6,25 +6,36 @@ on:
       - main
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout the repository
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # Log in to Docker Hub
-      - name: Login to Docker Hub
+      - name: SSH into Server and Check if v1 is Running
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            STATUS=$(docker service ps hello-world-app --format "{{.CurrentState}}" | grep Running | wc -l)
+            if [ "$STATUS" -eq "0" ]; then
+              echo "v1 is NOT running! Deploying v1 before proceeding."
+              docker service create --name hello-world-app --publish 4000:80 your-dockerhub-username/hello-world:v1
+              sleep 10
+            else
+              echo "v1 is already running. Proceeding with v2 deployment."
+            fi
+      - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_HUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin
 
-      # Build & push the v2 image
       - name: Build and Push v2 Docker Image
         run: |
-          docker build -t vk2615/hello-world-1:v2 .
-          docker push vk2615/hello-world-1:v2
-
-      # SSH into the server and deploy v2
+          IMAGE_TAG=${{ secrets.DOCKER_HUB_USERNAME }}/hello-world:v2
+          docker build -t $IMAGE_TAG .
+          docker push $IMAGE_TAG
       - name: Deploy v2 to Swarm
         uses: appleboy/ssh-action@master
         with:
@@ -32,46 +43,24 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "Checking if v1 is running..."
-            V1_STATUS=$(docker service ls | grep "hello-world-app" | wc -l)
-
-            if [ "$V1_STATUS" -eq "0" ]; then
-              echo "v1 is missing! Deploying v1..."
-              docker service create --name hello-world-app --publish 4000:80 vk2615/hello-world-1:v1
-              sleep 10
-            fi
-
-            echo "Pulling latest v2 image..."
-            docker pull vk2615/hello-world-1:v2 || { echo "Failed to pull v2 image"; exit 1; }
-
             echo "Deploying v2..."
-            docker service update --force --image vk2615/hello-world-1:v2 hello-world-app
-            
-            echo "Waiting for v2 to start..."
-            sleep 15  # Wait for v2 to stabilize
-
-            echo "Checking if v2 is working..."
-            HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000)
-
-            if [ "$HEALTH_CHECK" -ne "200" ]; then
-              echo "❌ v2 is not working! Rolling back to v1..."
-              docker service update --force --image vk2615/hello-world-1:v1 hello-world-app
-              exit 1
+            docker pull your-dockerhub-username/hello-world:v2
+            docker service update --image your-dockerhub-username/hello-world:v2 hello-world-app
+            sleep 10
+      - name: Health Check for v2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "Checking if v2 is running successfully..."
+            sleep 15
+            RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000)
+            if [ "$RESPONSE" -ne 200 ]; then
+              echo "v2 is failing! Forcing rollback to v1..."
+              docker service update --force --image vk2615/hello-world:v1 hello-world-app
+              exit 1  # Mark this step as failed so CI/CD knows it failed
             else
-              echo "✅ v2 is running fine."
+              echo "v2 is running successfully!"
             fi
-
-      # Send Slack Notification
-      - name: Send Slack Notification on Success
-        if: success()
-        uses: rtCamp/action-slack-notify@v2
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_MESSAGE: "✅ Deployment of v2 was successful! 🚀"
-
-      - name: Send Slack Notification on Failure
-        if: failure()
-        uses: rtCamp/action-slack-notify@v2
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_MESSAGE: "⚠️ Deployment of v2 failed! Rolling back to v1! 🔄"
