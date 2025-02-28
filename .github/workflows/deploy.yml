@@ -1,76 +1,48 @@
-name: Deploy React App with Docker Swarm
+name: CI/CD Pipeline for React
 
 on:
   push:
     branches:
-      - main  # Trigger deployment on push to main branch
+      - main  # Trigger on push to the main branch
 
 jobs:
-  deploy:
+  build-and-deploy-v3:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v2
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
 
-      - name: Cache Docker layers
-        uses: actions/cache@v3
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
+    - name: Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+    - name: Build and push Docker image for frontend-react
+      run: |
+        IMAGE_TAG=${{ github.run_id }}  # Set the tag to GitHub Run ID
+        docker build -t vk2615/frontend-react:$IMAGE_TAG -f ./frontend-react/Dockerfile ./frontend-react
+        docker push vk2615/frontend-react:$IMAGE_TAG
 
-      - name: Generate Docker Image Tag
-        id: tag
-        run: echo "IMAGE_TAG=${{ secrets.DOCKERHUB_USERNAME }}/react-frontend:$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
-
-      - name: Debug Docker Tag
-        run: echo "Using Docker tag: $IMAGE_TAG"
-        
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          push: true
-          tags: $IMAGE_TAG,${{ secrets.DOCKER_HUB_USERNAME }}/react-frontend:latest
-
-      - name: Deploy to Docker Swarm
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            # Initialize Docker Swarm (if not already initialized)
-            docker swarm init || true
-            
-            # Create a Docker overlay network for the service if not already created
-            docker network create --driver overlay react-network || true
-            
-            # Pull the new image from Docker Hub
-            docker pull $IMAGE_TAG
-            
-            # Remove any existing service with the same name (if necessary)
-            docker service rm react-frontend || true
-            
-            # Deploy a new Docker Swarm service with the latest image
-            docker service create \
-              --name react-frontend \
-              --publish 3001:80 \
-              --network react-network \
-              --replicas 1 \
-              -e "NODE_ENV=production" \
-              $IMAGE_TAG
-
-            # Clean up unused Docker images
-            docker system prune -f --volumes
+    - name: SSH into server and deploy to Docker Swarm (frontend-react only)
+      uses: appleboy/ssh-action@v0.1.5
+      with:
+        host: ${{ secrets.SSH_HOST }}
+        username: ${{ secrets.SSH_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          IMAGE_TAG=${{ github.run_id }}  # Set the tag to GitHub Run ID
+          # Pull the latest image for frontend-react from DockerHub
+          docker pull vk2615/frontend-react:$IMAGE_TAG
+          # Check if the frontend-react service exists, create it if not
+          if ! docker service ls | grep -q "frontend-react"; then
+            echo "Creating frontend-react service on port 4001"
+            docker service create --name frontend-react --replicas 2 --publish 4001:80 vk2615/frontend-react:$IMAGE_TAG
+          else
+            echo "frontend-react service already exists, updating it"
+            docker service update --image vk2615/frontend-react:$IMAGE_TAG frontend-react
+          fi
