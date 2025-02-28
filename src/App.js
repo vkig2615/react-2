@@ -1,8 +1,11 @@
 function App() {
-  throw new Error("This is a buggy v2!");
-  return <h1>Buggy Version 2</h1>;
+  return (
+    <div className="App">
+      <header className="App-header">
+        <h1>Hello from v3</h1>
+      </header>
+    </div>
+  );
 }
 
 export default App;
-
-
