@@ -26,9 +26,6 @@ jobs:
           IMAGE_NAME=${{ secrets.DOCKER_HUB_USERNAME }}/react-app3
           BUILD_TAG=$IMAGE_NAME:$RUN_ID
           LATEST_TAG=$IMAGE_NAME:latest
-          # Build and push images
-          docker buildx build --platform linux/amd64,linux/arm64 \
-            --push -t $BUILD_TAG -t $LATEST_TAG .
 
       - name: SSH to Server and Deploy react-app3
         uses: appleboy/ssh-action@v0.1.3
