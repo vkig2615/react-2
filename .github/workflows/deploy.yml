@@ -30,12 +30,19 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_PASSWORD }}
 
+      - name: Generate Docker Image Tag
+        id: tag
+        run: echo "IMAGE_TAG=${{ secrets.DOCKERHUB_USERNAME }}/react-frontend:$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
+
+      - name: Debug Docker Tag
+        run: echo "Using Docker tag: $IMAGE_TAG"
+        
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/react-frontend:${{ github.sha }}
+          tags: $IMAGE_TAG,${{ secrets.DOCKER_HUB_USERNAME }}/react-frontend:latest
 
       - name: Deploy to Docker Swarm
         uses: appleboy/ssh-action@master
@@ -44,17 +51,26 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            # Initialize Docker Swarm (if not already initialized)
+            docker swarm init || true
+            
             # Create a Docker overlay network for the service if not already created
             docker network create --driver overlay react-network || true
+            
             # Pull the new image from Docker Hub
-            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/react-frontend:${{ github.sha }}
+            docker pull $IMAGE_TAG
+            
             # Remove any existing service with the same name (if necessary)
             docker service rm react-frontend || true
-            # Create a new Docker Swarm service with the latest image
+            
+            # Deploy a new Docker Swarm service with the latest image
             docker service create \
               --name react-frontend \
               --publish 3001:80 \
               --network react-network \
               --replicas 1 \
               -e "NODE_ENV=production" \
-              ${{ secrets.DOCKERHUB_USERNAME }}/react-frontend:${{ github.sha }}
+              $IMAGE_TAG
+
+            # Clean up unused Docker images
+            docker system prune -f --volumes
