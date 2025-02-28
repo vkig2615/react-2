@@ -35,7 +35,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/react-frontend:${{ github.sha }}
+          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/react-frontend:${{ github.sha }}
 
       - name: Deploy to Docker Swarm
         uses: appleboy/ssh-action@master
